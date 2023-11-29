@@ -34,8 +34,6 @@
 #include <bsp/board.h>
 #include <tusb.h>
 
-#include "midi.h"
-
 #define USBMIDICNT CFG_TUD_MIDI
 #define TOTALMIDICNT USBMIDICNT
 #define ITFNUM 0
@@ -50,12 +48,10 @@ typedef struct
 {
     uint8_t id;
     uint8_t route_id;
-    uint8_t buffer[MIDIBUFLEN];
-    int len;
-    int writeindex;
 } t_midi;
 
 t_midi midi_ports[TOTALMIDICNT];
+uint8_t packet[4];
 
 void connect_output(t_midi * output_device, t_midi * input_device){
     output_device->route_id = input_device->id;
@@ -83,11 +79,6 @@ int main()
     {
         midi_ports[i].id = i;
         midi_ports[i].route_id = -1;
-        for (size_t j = 0; j < MIDIBUFLEN; j++)
-        {
-            midi_ports[i].buffer[j] = 0;
-        }
-        midi_ports[i].len = MIDIBUFLEN;
     }
 
     // Connect First MIDI Cable's Output to Second MIDI Cable's Input
@@ -98,46 +89,17 @@ int main()
         if(tud_task_event_ready()){
             // Perform USB Device Task
             tud_task();
-            // Perform MIDI Tasks
-            for (size_t i = USBMIDISTART; i < USBMIDIEND; i++)
+            while (tud_midi_available())
             {
-                usb_midi_task(i, &midi_ports[i]);
+                tud_midi_n_packet_read(ITFNUM, packet);
+                uint8_t cable = (packet[0] & 0xF0) >> 4;
+                if(midi_ports[cable].route_id != -1){
+                    packet[0] = (packet[0] & 0x0F) | (midi_ports[cable].route_id << 4);
+                    tud_midi_n_packet_write(ITFNUM, packet);
+                }
             }
         }
     }
 
     return 0;
-}
-
-void midi_write(t_midi * midi){
-    // Write data to routed MIDI cable
-    tud_midi_n_stream_write(ITFNUM, midi->route_id, midi->buffer, midi->writeindex);
-    midi->writeindex = 0;
-}
-
-void usb_midi_task(uint8_t cable_num, t_midi *midi)
-{
-    // Check if there is data available
-    uint32_t available = tud_midi_n_available(ITFNUM, cable_num);
-    if (available)
-    {
-        // Check if there is enough space in the buffer
-        if(midi->writeindex + available < midi->len)
-        {
-            // Read data from USB MIDI cable
-            tud_midi_n_stream_read(ITFNUM, cable_num, (midi->buffer + midi->writeindex), midi->len);
-            midi->writeindex += available;
-            // Check if there is a route to send the data to
-            if (midi->route_id != -1)
-            {
-                // Send data to the route
-                midi_write(midi);
-            }
-        }
-        else{
-            // If there is not enough space in the buffer (probably because the cable is not connected)
-            // Reset the write index
-            midi->writeindex = 0;
-        }
-    }
 }
